@@ -33,26 +33,38 @@ with st.form("risk_form"):
 
 # Risikologik (Dummy-Modell)
 if submit:
-    risk_score = 10  # Grundwert
+    # Basis-Risiko
+    risk_score = 0
 
-    if "atlant" in (origin + destination).lower():
-        risk_score += 20
-
-    if month in ["November", "Dezember", "Januar", "Februar"]:
+    # Saisonrisiko
+    winter_months = ["November", "Dezember", "Januar", "Februar"]
+    if month in winter_months:
         risk_score += 30
-
-    if "Feeder" in ship_type:
+    elif month in ["März", "April", "Oktober"]:
         risk_score += 15
-    elif "Ultra" in ship_type:
-        risk_score += 10
-
-    st.subheader(f"📊 Risikowert: {risk_score} von 100")
-
-    if risk_score >= 60:
-        st.error("⚠️ Hohes Risiko: Containerverlust möglich. Verstärkte Sicherung empfohlen.")
-    elif risk_score >= 30:
-        st.warning("🟠 Moderates Risiko. Routenbedingungen prüfen.")
     else:
-        st.success("✅ Geringes Risiko. Bedingungen stabil.")
+        risk_score += 5
 
-    st.caption("Hinweis: Dies ist eine vereinfachte MVP-Schätzung.")
+    # Route/Region (nur grob geschätzt anhand von Hafen-Namen)
+    route = (origin + destination).lower()
+    if any(sea in route for sea in ["atlant", "north", "kanada", "new york", "rotterdam"]):
+        risk_score += 30
+    elif any(sea in route for sea in ["mittelmeer", "mediterr", "istanbul", "genua"]):
+        risk_score += 10
+    else:
+        risk_score += 15
+
+    # Schiffstyp-Risiko
+    if "Feeder" in ship_type:
+        risk_score += 20
+    elif "Panamax" in ship_type:
+        risk_score += 10
+    elif "Ultra" in ship_type:
+        risk_score += 5
+
+    # Streckenlänge (grob geschätzt)
+    if len(origin) + len(destination) > 20:
+        risk_score += 10  # lange Route
+
+    # Cap bei 100
+    risk_score = min(risk_sco
