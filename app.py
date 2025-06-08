@@ -36,40 +36,27 @@ def geocode_place(place_name: str):
         return None, None
 
 def fetch_open_meteo_forecast(lat, lon, start_date, days=7):
-    """Wetterdaten (Wellenhöhe, Wind) von Open-Meteo für maritimen Bereich."""
     start_iso = start_date.strftime("%Y-%m-%dT%H:%M")
-    end_date = start_date + timedelta(days=days)
-    end_iso = end_date.strftime("%Y-%m-%dT%H:%M")
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "hourly": "wave_height,wind_speed_10m",
-        "start": start_iso,
-        "end": end_iso,
-        "timezone": "UTC"
-    }
+    end_date = (start_date + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M")
+    params = [
+        ("latitude", lat),
+        ("longitude", lon),
+        ("hourly", "wave_height"),
+        ("hourly", "wind_speed_10m"),
+        ("start", start_iso),
+        ("end", end_iso),
+        ("timezone", "UTC"),
+    ]
     try:
         resp = requests.get(OPEN_METEO_URL, params=params)
         resp.raise_for_status()
         data = resp.json()
-        hours = data.get("hourly", {}).get("time", [])
-        waves = data.get("hourly", {}).get("wave_height", [])
-        winds = data.get("hourly", {}).get("wind_speed_10m", [])
-        if not (hours and waves and winds):
-            st.warning("Keine vollständigen Wetterdaten erhalten.")
-            return []
-        forecast = []
-        # Jeden 24. Stundenwert (tagesweise)
-        for i in range(0, len(hours), 24):
-            forecast.append({
-                "time": hours[i],
-                "wave": waves[i],
-                "wind": winds[i],
-            })
-        return forecast
+        # Rest wie gehabt...
+        ...
     except Exception as e:
         st.error(f"Open-Meteo API Fehler: {e}")
         return []
+
 
 def compute_risk(wave, wind, vessel_type):
     """Einfaches Risikomodell basierend auf Wellenhöhe, Windgeschwindigkeit, Schiffstyp."""
