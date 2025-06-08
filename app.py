@@ -22,6 +22,17 @@ SHIP_TYPES = {
     "Feeder": 0.6
 }
 
+# Vordefinierte Wasserwegpunkte für Rotterdam → New York
+ROUTE_WAYPOINTS = {
+    ("Rotterdam", "New York"): [
+        (51.9225, 4.47917),  # Rotterdam
+        (51.5, 0.0),         # Ärmelkanal
+        (50.0, -10.0),       # Atlantik vor Irland
+        (45.0, -30.0),       # Mittlerer Atlantik
+        (40.7128, -74.0060)  # New York
+    ]
+}
+
 # Geocoding-Funktion mit Caching
 @st.cache_data(ttl=86400)  # Cache für 24 Stunden
 def geocode_city(city_name):
@@ -42,12 +53,6 @@ def geocode_city(city_name):
     except Exception as e:
         st.error(f"Geocoding-Fehler für {city_name}: {e}")
         return None
-
-# Wegpunkte generieren
-def generate_waypoints(start_lat, start_lon, end_lat, end_lon, num_points=5):
-    lats = np.linspace(start_lat, end_lat, num_points)
-    lons = np.linspace(start_lon, end_lon, num_points)
-    return list(zip(lats, lons))
 
 # Wetterdaten abrufen
 @st.cache_data(ttl=3600)  # Cache für 1 Stunde
@@ -133,12 +138,9 @@ def compute_waypoint_risk(forecast, ship_type):
 
         ship_factor = SHIP_TYPES[ship_type]
         risk = min(int(base_risk * (1.2 - ship_factor)), 100)
-        daily_risks.append(risk)
+        daily_risks.append({"date": date, "risk": risk, "wave_height": max_wave, "wind_speed": max_wind})
 
-    if daily_risks:
-        return max(daily_risks)
-    else:
-        return None
+    return daily_risks
 
 # Farbe basierend auf Risiko
 def get_risk_color(risk):
@@ -168,46 +170,63 @@ if st.button("Risikoanalyse starten"):
             start_coords = geocode_city(start_port)
             end_coords = geocode_city(end_port)
             if start_coords and end_coords:
-                waypoints = generate_waypoints(start_coords[0], start_coords[1], end_coords[0], end_coords[1])
-                waypoint_risks = []
-                for wp in waypoints:
-                    forecast = fetch_weather_data(wp[0], wp[1], start_date)
-                    risk = compute_waypoint_risk(forecast, ship_type)
-                    if risk is not None:
-                        waypoint_risks.append(risk)
-                    else:
-                        st.warning(f"Keine Daten für Wegpunkt {wp}")
+                # Prüfen, ob vordefinierte Route verfügbar ist
+                route_key = (start_port.lower(), end_port.lower())
+                if route_key in ROUTE_WAYPOINTS:
+                    waypoints = ROUTE_WAYPOINTS[route_key][1:-1]  # Ohne Start- und Zielpunkt
+                    all_points = [start_coords] + waypoints + [end_coords]
+                else:
+                    st.warning("Keine vordefinierte Route verfügbar. Verwende vereinfachte Route.")
+                    waypoints = []
+                    all_points = [start_coords, end_coords]
 
-                if waypoint_risks:
-                    total_risk = np.mean(waypoint_risks)
-                    st.success(f"Gesamtrisiko für die Route: {total_risk:.2f}%")
+                waypoint_risks = []
+                daily_forecasts = []
+                for wp in all_points:
+                    forecast = fetch_weather_data(wp[0], wp[1], start_date)
+                    daily_risks = compute_waypoint_risk(forecast, ship_type)
+                    if daily_risks:
+                        max_risk = max([dr["risk"] for dr in daily_risks])
+                        waypoint_risks.append(max_risk)
+                        daily_forecasts.append({
+                            "lat": wp[0],
+                            "lon": wp[1],
+                            "daily_risks": daily_risks
+                        })
+                    else:
+                        st.warning(f"Keine Wetterdaten für Wegpunkt ({wp[0]:.4f}, {wp[1]:.4f})")
+                        waypoint_risks.append(0)
+
+                if waypoint_risks and any(r > 0 for r in waypoint_risks):
+                    total_risk = np.mean([r for r in waypoint_risks if r > 0])
+                    st.success(f"Gesamtrisiko für die Route {start_port} → {end_port}: {total_risk:.2f}%")
 
                     # Karte erstellen
                     m = folium.Map(location=start_coords, zoom_start=4)
-                    folium.Marker(start_coords, popup="Start", icon=folium.Icon(color='blue')).add_to(m)
-                    folium.Marker(end_coords, popup="Ziel", icon=folium.Icon(color='blue')).add_to(m)
-                    for wp, risk in zip(waypoints, waypoint_risks):
+                    folium.Marker(start_coords, popup=f"Start: {start_port}", icon=folium.Icon(color='blue')).add_to(m)
+                    for i, (wp, risk) in enumerate(zip(all_points[1:-1], waypoint_risks[1:-1]), 1):
                         color = get_risk_color(risk)
-                        folium.CircleMarker(wp, radius=5, color=color, fill=True, popup=f"Risk: {risk}%").add_to(m)
-                    folium.PolyLine([start_coords] + waypoints + [end_coords], color='blue').add_to(m)
+                        folium.CircleMarker(wp, radius=5, color=color, fill=True, popup=f"Wegpunkt {i}: Risiko {risk}%").add_to(m)
+                    folium.Marker(end_coords, popup=f"Ziel: {end_port}", icon=folium.Icon(color='blue')).add_to(m)
+                    folium.PolyLine(all_points, color='blue').add_to(m)
                     folium_static(m)
 
                     # Entfernung und Reisezeit berechnen
                     total_distance = 0
-                    points = [start_coords] + waypoints + [end_coords]
-                    for i in range(len(points) - 1):
-                        total_distance += geodesic(points[i], points[i+1]).km
+                    for i in range(len(all_points) - 1):
+                        total_distance += geodesic(all_points[i], all_points[i+1]).km
                     speed_kmh = 37  # 20 knots ≈ 37 km/h
                     travel_time_hours = total_distance / speed_kmh
                     st.write(f"Gesamtentfernung: {total_distance:.2f} km")
-                    st.write(f"Geschätzte Reisezeit: {travel_time_hours:.2f} Stunden")
+                    st.write(f"Geschätzte Reisezeit: {travel_time_hours:.2f} Stunden ({travel_time_hours/24:.1f} Tage)")
 
-                    # Wegpunktdaten anzeigen
-                    df = pd.DataFrame({
-                        "Latitude": [wp[0] for wp in waypoints],
-                        "Longitude": [wp[1] for wp in waypoints],
-                        "Risiko (%)": waypoint_risks
-                    })
-                    st.dataframe(df)
+                    # Aktuelle und 7-Tage-Prognose anzeigen
+                    st.subheader("Wetter- und Risikoprognose")
+                    for wp_data in daily_forecasts:
+                        st.write(f"Wegpunkt ({wp_data['lat']:.4f}, {wp_data['lon']:.4f})")
+                        df = pd.DataFrame(wp_data["daily_risks"])
+                        df = df[["date", "wave_height", "wind_speed", "risk"]]
+                        df.columns = ["Datum", "Wellenhöhe (m)", "Windgeschw. (m/s)", "Risiko (%)"]
+                        st.dataframe(df, use_container_width=True)
                 else:
-                    st.error("Keine Daten für die Risikoberechnung verfügbar.")
+                    st.error("Keine ausreichenden Wetterdaten für die Risikoberechnung.")
