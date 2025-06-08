@@ -97,9 +97,9 @@ def generate_sea_waypoints(start_lat, start_lon, end_lat, end_lon, num_points=5)
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
 def fetch_marine_weather_data(lat, lon, start_date):
     try:
-        start_iso = start_date.strftime("%Y-%m-%dT00:00")
+        start_iso = start_date.strftime("%Y-%m-%d")  # Nur YYYY-MM-DD
         end_date = start_date + timedelta(days=FORECAST_DAYS)
-        end_iso = end_date.strftime("%Y-%m-%dT23:59")
+        end_iso = end_date.strftime("%Y-%m-%d")  # Nur YYYY-MM-DD
 
         # Kombinierte Marine API für Wellenhöhe und Windgeschwindigkeit
         marine_url = (
@@ -146,29 +146,36 @@ def compute_waypoint_risk(forecast, ship_type):
         max_wave = max(data["wave_heights"])
         max_wind = max(data["wind_speeds"])
         base_risk = 0
+        risk_reason = []
         if max_wave > 4:
             base_risk += 40
-            risk_reason = "Hohe Wellen"
+            risk_reason.append("Hohe Wellen")
         elif max_wave > 2:
             base_risk += 20
-            risk_reason = "Moderate Wellen"
+            risk_reason.append("Moderate Wellen")
         else:
             base_risk += 5
-            risk_reason = "Niedrige Wellen"
+            risk_reason.append("Niedrige Wellen")
 
         if max_wind > 15:
             base_risk += 40
-            risk_reason += ", Starker Wind"
+            risk_reason.append("Starker Wind")
         elif max_wind > 8:
             base_risk += 20
-            risk_reason += ", Moderater Wind"
+            risk_reason.append("Moderater Wind")
         else:
             base_risk += 5
-            risk_reason += ", Schwacher Wind"
+            risk_reason.append("Schwacher Wind")
 
         ship_factor = SHIP_TYPES[ship_type]
         risk = min(int(base_risk * (1.2 - ship_factor)), 100)
-        daily_risks.append({"date": date, "risk": risk, "wave_height": max_wave, "wind_speed": max_wind, "reason": risk_reason})
+        daily_risks.append({
+            "date": date,
+            "risk": risk,
+            "wave_height": max_wave,
+            "wind_speed": max_wind,
+            "reason": ", ".join(risk_reason)
+        })
 
     return daily_risks
 
@@ -239,7 +246,7 @@ if st.button("Risikoanalyse starten"):
 
                 if waypoint_risks and any(r > 0 for r in waypoint_risks):
                     # Gewichtetes Risiko basierend auf Streckenlänge
-                    weighted_risks = [r * d for r, d in zip(waypoint_risks, distances + [0])]
+                    weighted_risks = [r * d for r, d in zip(waypoint_risks[:-1], distances)]
                     total_risk = sum(weighted_risks) / total_distance if total_distance > 0 else 0
                     st.success(f"Gesamtrisiko für die Seeweg-Route {start_port} → {end_port}: {total_risk:.2f}%")
 
