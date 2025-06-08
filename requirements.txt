@@ -4,3 +4,4 @@ pandas
 pydeck
 matplotlib
 plotly.express
+folium
