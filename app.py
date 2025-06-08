@@ -197,8 +197,14 @@ if st.button("Risikoanalyse starten"):
         )
 
         midpoint_lon = np.mean([pt[0] for pt in route_coords])
-        midpoint_lat = np.mean([pt[1] for pt in
+        midpoint_lat = np.mean([pt[1] for pt in route_coords])
 
+        view_state = pdk.ViewState(
+            longitude=midpoint_lon,
+            latitude=midpoint_lat,
+            zoom=3,
+            pitch=0,
+        )
 
-        st.subheader("🗺️ Geschätzte Schifffahrtsroute")
+        st.subheader("🗺️ Geschätzte Schifffahrtsroute (Luftlinie)")
         st.pydeck_chart(pdk.Deck(layers=[route_layer], initial_view_state=view_state))
