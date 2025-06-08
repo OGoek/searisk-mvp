@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 # === SETTINGS ===
 st.set_page_config(page_title="SeaRisk AI", page_icon="🚢")
 
-# === HEADLINE ===
 st.title("🌊 SeaRisk AI – Maritime Risikobewertung mit Echtzeit-Wetterdaten")
 
 # === INPUT FORM ===
@@ -36,7 +35,21 @@ port_coords = {
 stormglass_api_key = "52eefa2a-4468-11f0-b16b-0242ac130006-52eefa98-4468-11f0-b16b-0242ac130006"
 noaa_token = "QWTcLJKbRevQchwfIcdKlAdpSJAbxTgg"
 metno_headers = {"User-Agent": "SeaRiskAI/you@example.com"}
-# === HELPER FUNCTIONS ===
+
+# NOAA Funktion mit Fehlerbehandlung
+def get_noaa_station(lat, lon):
+    url = f"https://www.ncei.noaa.gov/cdo-web/api/v2/stations?extent={lat-0.1},{lon-0.1},{lat+0.1},{lon+0.1}"
+    headers = {"token": noaa_token}
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        stations = response.json().get("results", [])
+        return stations[0]["name"] if stations else "Keine Station gefunden"
+    except Exception as e:
+        st.warning(f"⚠️ NOAA Fehler: {e}")
+        return "Fehler bei NOAA"
+from datetime import datetime, timedelta
+
 def get_stormglass_forecast(lat, lon):
     end = datetime.utcnow() + timedelta(days=7)
     start = datetime.utcnow()
@@ -44,51 +57,46 @@ def get_stormglass_forecast(lat, lon):
     params = {
         'lat': lat,
         'lng': lon,
-        'params': ','.join(['waveHeight', 'windSpeed']),
+        'params': 'waveHeight,windSpeed',
         'start': int(start.timestamp()),
         'end': int(end.timestamp())
     }
     headers = {'Authorization': stormglass_api_key}
-    response = requests.get(url, params=params, headers=headers)
-    data = response.json()
-    forecast = []
-    for hour in data.get("hours", [])[:7*24:24]:  # alle 24h
-        try:
-            forecast.append({
-                "time": hour["time"],
-                "wave": hour["waveHeight"]["noaa"],
-                "wind": hour["windSpeed"]["noaa"]
-            })
-        except:
-            continue
-    return forecast
+    try:
+        response = requests.get(url, params=params, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        forecast = []
+        for hour in data.get("hours", [])[:7*24:24]:
+            wave = hour.get("waveHeight", {}).get("noaa", 0)
+            wind = hour.get("windSpeed", {}).get("noaa", 0)
+            time = hour.get("time", "n/a")
+            forecast.append({"time": time, "wave": wave, "wind": wind})
+        return forecast
+    except Exception as e:
+        st.warning(f"⚠️ Stormglass Fehler: {e}")
+        return []
 
 def get_metno_forecast(lat, lon):
     url = f"https://api.met.no/weatherapi/oceanforecast/2.0/complete?lat={lat}&lon={lon}"
-    response = requests.get(url, headers=metno_headers)
-    forecast = []
     try:
-        timeseries = response.json()["properties"]["timeseries"]
+        response = requests.get(url, headers=metno_headers)
+        response.raise_for_status()
+        timeseries = response.json().get("properties", {}).get("timeseries", [])
+        forecast = []
         for t in timeseries[:7*24:24]:
             details = t["data"]["instant"]["details"]
+            wave = details.get("significantWaveHeight", 0)
+            wind = details.get("windSpeed", 0)
             forecast.append({
                 "time": t["time"],
-                "wave": details.get("significantWaveHeight", 0),
-                "wind": details.get("windSpeed", 0)
+                "wave": wave,
+                "wind": wind
             })
-    except:
-        pass
-    return forecast
-
-def get_noaa_station(lat, lon):
-    url = f"https://www.ncei.noaa.gov/cdo-web/api/v2/stations?extent={lat-0.1},{lon-0.1},{lat+0.1},{lon+0.1}"
-    headers = {"token": noaa_token}
-    try:
-        response = requests.get(url, headers=headers)
-        stations = response.json().get("results", [])
-        return stations[0]["name"] if stations else "Keine Station gefunden"
-    except:
-        return "Fehler bei NOAA"
+        return forecast
+    except Exception as e:
+        st.warning(f"⚠️ Met.no Fehler: {e}")
+        return []
 
 def compute_risk(wave, wind, vessel_type):
     risk = 0
@@ -107,21 +115,21 @@ def compute_risk(wave, wind, vessel_type):
         risk += 5
 
     if vessel_type in ["Fischkutter", "Fähre"]:
-        risk += 10  # kleinere Schiffe = höheres Risiko
+        risk += 10
 
     return min(risk, 100)
-# === MAIN LOGIC ===
 if submitted:
     if origin not in port_coords or destination not in port_coords:
         st.error("Bitte gültige Häfen eingeben.")
     else:
-        st.subheader("📍 Hafenpositionen")
         origin_lat, origin_lon = port_coords[origin]
         dest_lat, dest_lon = port_coords[destination]
+
+        st.subheader("📍 Hafenpositionen")
         st.write(f"**{origin}** → ({origin_lat}, {origin_lon})")
         st.write(f"**{destination}** → ({dest_lat}, {dest_lon})")
 
-        # NOAA-Station anzeigen
+        # NOAA Station
         noaa_station = get_noaa_station(origin_lat, origin_lon)
         st.info(f"📡 Nächste NOAA-Station: {noaa_station}")
 
@@ -129,9 +137,13 @@ if submitted:
         sg_data = get_stormglass_forecast(origin_lat, origin_lon)
         met_data = get_metno_forecast(origin_lat, origin_lon)
 
-        # Kombinieren + Risikobewertung
+        st.write("📡 Stormglass-Daten", sg_data)
+        st.write("🌐 Met.no-Daten", met_data)
+
+        # Kombiniere Daten und berechne Risiko
         combined = []
-        for i in range(min(len(sg_data), len(met_data))):
+        length = min(len(sg_data), len(met_data))
+        for i in range(length):
             avg_wave = (sg_data[i]["wave"] + met_data[i]["wave"]) / 2
             avg_wind = (sg_data[i]["wind"] + met_data[i]["wind"]) / 2
             risk = compute_risk(avg_wave, avg_wind, vessel_type)
@@ -146,28 +158,35 @@ if submitted:
         st.subheader("📊 7-Tage Risikoanalyse")
         st.dataframe(df)
 
-        # Karte
-        st.subheader("🗺️ Routenkarte")
-        route_df = pd.DataFrame({
-            'from_lon': [origin_lon],
-            'from_lat': [origin_lat],
-            'to_lon': [dest_lon],
-            'to_lat': [dest_lat]
-        })
+        # Wasserweg-Route simulieren mit Wegpunkten
+        # Beispiel: Rotterdam → Ärmelkanal → Atlantik → New York
+        route_coords = [
+            [origin_lon, origin_lat],          # Rotterdam
+            [1.8, 50.9],                      # Ärmelkanal (z.B. Dover)
+            [-10.0, 45.0],                   # Mittlerer Atlantik
+            [-74.0060, 40.7128]              # New York
+        ]
+
+        route_df = pd.DataFrame(route_coords, columns=['lon', 'lat'])
 
         layer = pdk.Layer(
-            "LineLayer",
-            route_df,
-            get_source_position='[from_lon, from_lat]',
-            get_target_position='[to_lon, to_lat]',
-            get_width=4,
-            get_color=[200, 30, 0]
+            "PathLayer",
+            data=[{"path": route_coords}],
+            get_path="path",
+            get_width=5,
+            get_color=[0, 100, 255],
+            width_min_pixels=3,
         )
+
+        midpoint_lon = sum([pt[0] for pt in route_coords]) / len(route_coords)
+        midpoint_lat = sum([pt[1] for pt in route_coords]) / len(route_coords)
 
         view_state = pdk.ViewState(
-            longitude=(origin_lon + dest_lon)/2,
-            latitude=(origin_lat + dest_lat)/2,
-            zoom=2
+            longitude=midpoint_lon,
+            latitude=midpoint_lat,
+            zoom=3,
+            pitch=0,
         )
 
+        st.subheader("🗺️ Realistische Schifffahrtsroute")
         st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state))
