@@ -37,31 +37,43 @@ def geocode_location(place):
         st.warning(f"Geocoding Fehler: {e}")
         return None, None
 
-def fetch_open_meteo_forecast(lat, lon, start_date, days=7):
+def fetch_open_meteo_forecast(lat, lon, start_dt, days=7):
+    base_url = "https://marine-api.open-meteo.com/v1/marine"
+    start_iso = start_dt.strftime("%Y-%m-%dT00:00")
+    end_iso = (start_dt + timedelta(days=days)).strftime("%Y-%m-%dT00:00")
+
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "wave_height,wind_speed_10m",
+        "start": start_iso,
+        "end": end_iso,
+        "timezone": "UTC"
+    }
+
     try:
-        end_date = start_date + timedelta(days=days)
-        url = (
-            "https://marine-api.open-meteo.com/v1/marine"
-            f"?latitude={lat}&longitude={lon}"
-            "&hourly=wave_height"
-            "&hourly=wind_speed_10m"
-            f"&start={start_date.strftime('%Y-%m-%dT%H:%M')}"
-            f"&end={end_date.strftime('%Y-%m-%dT%H:%M')}"
-            "&timezone=UTC"
-        )
-        response = requests.get(url)
+        response = requests.get(base_url, params=params)
         response.raise_for_status()
         data = response.json()
-        times = data["hourly"]["time"]
-        wave = data["hourly"]["wave_height"]
-        wind = data["hourly"]["wind_speed_10m"]
+        hours = data.get("hourly", {})
+        times = hours.get("time", [])
+        waves = hours.get("wave_height", [])
+        winds = hours.get("wind_speed_10m", [])
         forecast = []
-        for t, w, ws in zip(times, wave, wind):
-            forecast.append({"time": t, "wave": w, "wind": ws})
+
+        for t, w, ws in zip(times, waves, winds):
+            forecast.append({
+                "time": t,
+                "wave": w,
+                "wind": ws
+            })
+
         return forecast
+
     except Exception as e:
         st.warning(f"⚠️ Open-Meteo API Fehler: {e}")
         return []
+
 
 def compute_risk(wave, wind, vessel_factor):
     risk = 0
