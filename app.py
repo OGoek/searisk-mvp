@@ -7,6 +7,7 @@ from geopy.distance import geodesic
 from datetime import datetime, timedelta
 import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential
+import json
 
 # Konfiguration
 st.set_page_config(page_title="SeaRisk AI MVP", layout="wide")
@@ -58,13 +59,10 @@ ROUTE_WAYPOINTS = {
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
 def geocode_city(city_name):
     try:
-        # Verwende vordefinierte Koordinaten, wenn verfügbar
         if city_name.lower() in KNOWN_PORTS:
             lat, lon = KNOWN_PORTS[city_name.lower()]
             st.write(f"Verwende vordefinierte Koordinaten für {city_name}: ({lat:.4f}, {lon:.4f})")
             return lat, lon
-
-        # Nominatim-Suche für andere Häfen
         response = requests.get(
             "https://nominatim.openstreetmap.org/search",
             params={"q": f"{city_name}, port", "format": "json", "limit": 1},
@@ -92,9 +90,62 @@ def generate_sea_waypoints(start_lat, start_lon, end_lat, end_lon, num_points=5)
     st.warning("Fallback-Route kann Landmassen kreuzen. Für präzise Seewege bitte vordefinierte Route verwenden.")
     return waypoints
 
-# Wetterdaten abrufen (separate API-Anfragen für wave_height und wind_speed_10m)
+# OpenSeaMap GeoJSON-Daten abrufen
 @st.cache_data(ttl=3600)  # Cache für 1 Stunde
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+def fetch_openseamap_data(min_lat, min_lon, max_lat, max_lon):
+    try:
+        overpass_url = "https://overpass-api.de/api/interpreter"
+        overpass_query = f"""
+        [out:json][timeout:25];
+        (
+          node["seamark:type"~"buoy_lateral|buoy_cardinal|lighthouse|harbour"]({min_lat},{min_lon},{max_lat},{max_lon});
+          way["seamark:type"~"harbour|dock"]({min_lat},{min_lon},{max_lat},{max_lon});
+        );
+        out geom;
+        """
+        response = requests.post(overpass_url, data={"data": overpass_query}, timeout=API_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+
+        # Konvertiere Overpass-Daten in GeoJSON
+        geojson = {"type": "FeatureCollection", "features": []}
+        for element in data.get("elements", []):
+            if element["type"] == "node":
+                feature = {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [element["lon"], element["lat"]]
+                    },
+                    "properties": element.get("tags", {})
+                }
+                geojson["features"].append(feature)
+            elif element["type"] == "way":
+                # Für Ways (z. B. Häfen) die Geometrie aus den Knoten erstellen
+                coords = []
+                for node_id in element.get("nodes", []):
+                    for node in data["elements"]:
+                        if node["type"] == "node" and node["id"] == node_id:
+                            coords.append([node["lon"], node["lat"]])
+                if coords:
+                    feature = {
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": coords
+                        },
+                        "properties": element.get("tags", {})
+                    }
+                    geojson["features"].append(feature)
+        return geojson
+    except Exception as e:
+        st.warning(f"Fehler beim Abrufen der OpenSeaMap-Daten: {e}")
+        return {"type": "FeatureCollection", "features": []}
+
+# Wetterdaten abrufen (separate API-Anfragen für wave_height und wind_speed_10m)
+@st.cache_data(ttl=3600)  # Cache für 1 Stunde
+@retry(stop=stop_after_attempt(3))
 def fetch_marine_weather_data(lat, lon, start_date):
     try:
         start_iso = start_date.strftime("%Y-%m-%d")  # YYYY-MM-DD
@@ -232,6 +283,15 @@ if st.button("Risikoanalyse starten"):
                     waypoints = generate_sea_waypoints(start_coords[0], start_coords[1], end_coords[0], end_coords[1])
                     all_points = [start_coords] + waypoints + [end_coords]
 
+                # Bounding Box für OpenSeaMap berechnen
+                lats = [p[0] for p in all_points]
+                lons = [p[1] for p in all_points]
+                min_lat, max_lat = min(lats) - 0.5, max(lats) + 0.5
+                min_lon, max_lon = min(lons) - 0.5, max(lons) + 0.5
+
+                # OpenSeaMap-Daten abrufen
+                openseamap_geojson = fetch_openseamap_data(min_lat, min_lon, max_lat, max_lon)
+
                 # Ladebalken für Wetterdaten
                 progress_bar = st.progress(0)
                 waypoint_risks = []
@@ -273,7 +333,30 @@ if st.button("Risikoanalyse starten"):
                         folium.CircleMarker(wp, radius=5, color=color, fill=True, popup=f"Wegpunkt {i}: Risiko {risk}%").add_to(m)
                     folium.Marker(end_coords, popup=f"Ziel: {end_port}", icon=folium.Icon(color='blue')).add_to(m)
                     folium.PolyLine(all_points, color='blue').add_to(m)
+
+                    # OpenSeaMap GeoJSON-Layer hinzufügen
+                    def style_function(feature):
+                        seamark_type = feature["properties"].get("seamark:type", "unknown")
+                        colors = {
+                            "buoy_lateral": "purple",
+                            "buoy_cardinal": "orange",
+                            "lighthouse": "red",
+                            "harbour": "green",
+                            "dock": "blue"
+                        }
+                        return {"color": colors.get(seamark_type, "gray"), "weight": 3}
+
+                    folium.GeoJson(
+                        openseamap_geojson,
+                        name="OpenSeaMap",
+                        popup=folium.GeoJsonPopup(fields=["seamark:type", "seamark:name"], aliases=["Typ", "Name"]),
+                        style_function=style_function,
+                        show=True
+                    ).add_to(m)
+                    folium.LayerControl().add_to(m)
+
                     folium_static(m)
+                    st.write("Nautische Daten: © OpenSeaMap, OpenStreetMap contributors")  # Lizenzangabe
 
                     # Entfernung und Reisezeit
                     speed_kmh = 37  # 20 knots ≈ 37 km/h
