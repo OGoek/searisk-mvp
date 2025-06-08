@@ -54,17 +54,31 @@ if submit:
     else:
         risk_score += 15
 
-    # Schiffstyp-Risiko
+        # Schiffstyp-Risiko
     if "Feeder" in ship_type:
-        risk_score += 20
+        risk_score += 25
     elif "Panamax" in ship_type:
+        risk_score += 15
+    elif "Post" in ship_type:
         risk_score += 10
     elif "Ultra" in ship_type:
         risk_score += 5
 
-    # Streckenlänge (grob geschätzt)
+    # Streckenlänge grob schätzen (nur als Platzhalter)
     if len(origin) + len(destination) > 20:
-        risk_score += 10  # lange Route
+        risk_score += 10
 
-    # Cap bei 100
-    risk_score = min(risk_sco
+    # Risiko auf Skala von 0–100 beschränken
+    risk_score = min(risk_score, 100)
+
+    st.subheader(f"📊 Risikowert: {risk_score} von 100")
+
+    if risk_score >= 70:
+        st.error("⚠️ Sehr hohes Risiko: Containerverlust sehr wahrscheinlich.")
+    elif risk_score >= 40:
+        st.warning("🟠 Mittleres Risiko: Vorsichtsmaßnahmen empfohlen.")
+    else:
+        st.success("✅ Geringes Risiko. Route gilt als stabil.")
+
+    st.caption("Hinweis: Risikomodell basiert auf vereinfachten Annahmen zu Saison, Region und Schiffstyp.")
+
