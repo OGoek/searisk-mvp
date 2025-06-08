@@ -8,10 +8,79 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="SeaRisk AI MVP", layout="wide")
 
-# API Keys & Headers
-stormglass_api_key = "52eefa2a-4468-11f0-b16b-0242ac130006"  # deinen Key hier einsetzen
-metno_headers = {
-    "User-Agent": "(SeaRiskAIApp/1.0 ozan.goektas@gmail.com)"
+# --- Geocoding via Nominatim OpenStreetMap ---
+def geocode_place(place_name):
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {
+        "q": place_name,
+        "format": "json",
+        "limit": 1
+    }
+    try:
+        response = requests.get(url, params=params, headers={"User-Agent": "SeaRiskAI/1.0"})
+        response.raise_for_status()
+        data = response.json()
+        if len(data) == 0:
+            return None, None
+        lat = float(data[0]["lat"])
+        lon = float(data[0]["lon"])
+        return lat, lon
+    except Exception as e:
+        st.warning(f"⚠️ Geokodierung Fehler: {e}")
+        return None, None
+
+# --- Open-Meteo API für Wind und Wellen (7-Tage Vorhersage, stündlich) ---
+def get_openmeteo_forecast(lat, lon, start_date):
+    start_iso = start_date.isoformat() + "T00:00"
+    end_date = start_date + timedelta(days=7)
+    end_iso = end_date.isoformat() + "T23:59"
+
+    url = "https://marine-api.open-meteo.com/v1/marine"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "wave_height,wind_speed_10m",
+        "start": start_iso,
+        "end": end_iso,
+        "timezone": "UTC"
+    }
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        hours = data.get("hourly", {})
+        times = hours.get("time", [])
+        waves = hours.get("wave_height", [])
+        winds = hours.get("wind_speed_10m", [])
+
+        forecast = []
+        # Wir nehmen jeweils Tageswerte (Mittelwert pro Tag)
+        for day_idx in range(7):
+            day_waves = waves[day_idx*24:(day_idx+1)*24]
+            day_winds = winds[day_idx*24:(day_idx+1)*24]
+            day_time = times[day_idx*24][:10]  # YYYY-MM-DD
+            if len(day_waves) == 0 or len(day_winds) == 0:
+                continue
+            avg_wave = np.mean(day_waves)
+            avg_wind = np.mean(day_winds)
+            forecast.append({
+                "time": day_time,
+                "wave": avg_wave,
+                "wind": avg_wind
+            })
+        return forecast
+    except Exception as e:
+        st.warning(f"⚠️ Open-Meteo API Fehler: {e}")
+        return []
+
+# --- Risikoberechnung mit Multiplikatoren ---
+VESSEL_RISK_FACTORS = {
+    "Containerschiff": 1.0,
+    "Bulker": 1.1,
+    "Panamax": 1.2,
+    "Kümo": 1.3,
+    "Tanker": 1.0,
+    "Supertanker": 1.4
 }
 
 def compute_risk(wave, wind, vessel_type):
@@ -30,7 +99,8 @@ def compute_risk(wave, wind, vessel_type):
     else:
         risk += 5
 
-    # Kein Extra-Risiko für Fischkutter/Fähre mehr
+    multiplier = VESSEL_RISK_FACTORS.get(vessel_type, 1.0)
+    risk *= multiplier
     return min(risk, 100)
 
 def calculate_trend(values):
@@ -41,170 +111,104 @@ def calculate_trend(values):
     a, _ = np.polyfit(x, y, 1)
     return a
 
-def get_stormglass_data(lat, lon, start_dt, end_dt):
-    url = "https://api.stormglass.io/v2/weather/point"
-    params = {
-        'lat': lat,
-        'lng': lon,
-        'params': 'waveHeight,windSpeed',
-        'start': int(start_dt.timestamp()),
-        'end': int(end_dt.timestamp())
-    }
-    headers = {'Authorization': stormglass_api_key}
-    try:
-        response = requests.get(url, params=params, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        result = []
-        for hour in data.get("hours", []):
-            wave = hour.get("waveHeight", {}).get("noaa", 0)
-            wind = hour.get("windSpeed", {}).get("noaa", 0)
-            time = hour.get("time", "")
-            result.append({"time": time, "wave": wave, "wind": wind})
-        return result
-    except Exception as e:
-        st.warning(f"⚠️ Stormglass API Fehler: {e}")
-        return []
-
-def get_metno_forecast(lat, lon):
-    url = f"https://api.met.no/weatherapi/oceanforecast/2.0/complete?lat={lat}&lon={lon}"
-    try:
-        response = requests.get(url, headers=metno_headers)
-        response.raise_for_status()
-        timeseries = response.json().get("properties", {}).get("timeseries", [])
-        forecast = []
-        for t in timeseries[:7*24:24]:
-            details = t["data"]["instant"]["details"]
-            wave = details.get("significantWaveHeight", 0)
-            wind = details.get("windSpeed", 0)
-            forecast.append({
-                "time": t["time"],
-                "wave": wave,
-                "wind": wind
-            })
-        return forecast
-    except Exception as e:
-        st.warning(f"⚠️ Met.no API Fehler: {e}")
-        return []
-
 st.title("🚢 SeaRisk AI MVP")
 
-st.subheader("Hafen Koordinaten manuell eingeben")
+origin = st.text_input("Start-Hafen eingeben (z.B. Rotterdam)")
+destination = st.text_input("Ziel-Hafen eingeben (z.B. New York)")
 
-col1, col2 = st.columns(2)
-with col1:
-    origin_lat = st.number_input("Start Hafen Latitude", value=51.95, format="%.5f")
-    origin_lon = st.number_input("Start Hafen Longitude", value=4.13, format="%.5f")
-with col2:
-    dest_lat = st.number_input("Ziel Hafen Latitude", value=40.7128, format="%.5f")
-    dest_lon = st.number_input("Ziel Hafen Longitude", value=-74.0060, format="%.5f")
-
-vessel_type = st.selectbox("Schiffstyp auswählen", [
-    "Containerschiff",
-    "Bulker",
-    "Panamax",
-    "Kümo",
-    "Tanker",
-    "Supertanker"
-])
+vessel_type = st.selectbox("Schiffstyp auswählen", list(VESSEL_RISK_FACTORS.keys()))
 
 start_date = st.date_input("Startdatum der Analyse", datetime.utcnow().date())
 st.write("**Hinweis:** Die Prognose umfasst 7 Tage ab Startdatum.")
 
 if st.button("Risikoanalyse starten"):
-    if (origin_lat == dest_lat) and (origin_lon == dest_lon):
-        st.error("Start- und Zielhafen müssen unterschiedlich sein.")
+    if not origin or not destination:
+        st.error("Bitte Start- und Zielhafen eingeben.")
+    elif origin.lower() == destination.lower():
+        st.error("Start- und Zielhafen dürfen nicht gleich sein.")
     else:
-        st.subheader("📍 Eingabedaten")
-        st.write(f"Start Hafen: ({origin_lat:.5f}, {origin_lon:.5f})")
-        st.write(f"Ziel Hafen: ({dest_lat:.5f}, {dest_lon:.5f})")
-        st.write(f"Schiffstyp: {vessel_type}")
-        st.write(f"Startdatum: {start_date}")
+        origin_lat, origin_lon = geocode_place(origin)
+        dest_lat, dest_lon = geocode_place(destination)
 
-        end_hist = datetime.utcnow()
-        start_hist = end_hist - timedelta(days=30)
-        hist_data = get_stormglass_data(origin_lat, origin_lon, start_hist, end_hist)
-
-        if not hist_data:
-            st.warning("Keine historischen Daten verfügbar.")
+        if origin_lat is None or origin_lon is None:
+            st.error(f"Start-Hafen '{origin}' konnte nicht geokodiert werden.")
+        elif dest_lat is None or dest_lon is None:
+            st.error(f"Ziel-Hafen '{destination}' konnte nicht geokodiert werden.")
         else:
-            hist_risks = [compute_risk(d['wave'], d['wind'], vessel_type) for d in hist_data if d['wave'] is not None and d['wind'] is not None]
-            avg_hist_risk = np.mean(hist_risks) if hist_risks else 0
-            st.subheader("⚓ Generelles Risiko basierend auf historischen Daten (letzte 30 Tage)")
-            st.write(f"📈 Durchschnittliches Risiko: **{avg_hist_risk:.1f} / 100**")
+            st.subheader("📍 Hafenkoordinaten")
+            st.write(f"{origin}: ({origin_lat:.5f}, {origin_lon:.5f})")
+            st.write(f"{destination}: ({dest_lat:.5f}, {dest_lon:.5f})")
 
-        start_forecast = datetime.combine(start_date, datetime.min.time())
-        end_forecast = start_forecast + timedelta(days=7)
+            # Historische Daten: Open-Meteo liefert keine historischen Wellen/Wind
+            # Wir verzichten hier auf historische Risikoanalyse (oder implementieren mit externer Quelle)
 
-        sg_forecast = get_stormglass_data(origin_lat, origin_lon, start_forecast, end_forecast)
-        met_forecast = get_metno_forecast(origin_lat, origin_lon)
+            # Prognose mit Open-Meteo API
+            forecast = get_openmeteo_forecast(origin_lat, origin_lon, start_date)
 
-        if not sg_forecast or not met_forecast:
-            st.error("Prognosedaten konnten nicht geladen werden.")
-        else:
-            length = min(len(sg_forecast), len(met_forecast))
-            combined = []
-            for i in range(length):
-                avg_wave = (sg_forecast[i]["wave"] + met_forecast[i]["wave"]) / 2
-                avg_wind = (sg_forecast[i]["wind"] + met_forecast[i]["wind"]) / 2
-                risk = compute_risk(avg_wave, avg_wind, vessel_type)
-                combined.append({
-                    "time": sg_forecast[i]["time"][:10],
-                    "wave": avg_wave,
-                    "wind": avg_wind,
-                    "risk": risk
-                })
+            if not forecast:
+                st.error("Prognosedaten konnten nicht geladen werden.")
+            else:
+                combined = []
+                for entry in forecast:
+                    risk = compute_risk(entry["wave"], entry["wind"], vessel_type)
+                    combined.append({
+                        "time": entry["time"],
+                        "wave": entry["wave"],
+                        "wind": entry["wind"],
+                        "risk": risk
+                    })
 
-            df = pd.DataFrame(combined)
+                df = pd.DataFrame(combined)
 
-            st.subheader("📊 Risiko für die nächsten 7 Tage (Prognose)")
-            st.dataframe(df.rename(columns={
-                "time": "Datum",
-                "wave": "Wellenhöhe (m)",
-                "wind": "Windgeschw. (m/s)",
-                "risk": "Risiko"
-            }))
+                st.subheader("📊 Risiko für die nächsten 7 Tage (Prognose)")
+                st.dataframe(df.rename(columns={
+                    "time": "Datum",
+                    "wave": "Wellenhöhe (m)",
+                    "wind": "Windgeschw. (m/s)",
+                    "risk": "Risiko"
+                }))
 
-            wave_trend = calculate_trend(df["Wellenhöhe (m)"].values)
-            wind_trend = calculate_trend(df["Windgeschw. (m/s)"].values)
-            risk_trend = calculate_trend(df["Risiko"].values)
+                wave_trend = calculate_trend(df["Wellenhöhe (m)"].values)
+                wind_trend = calculate_trend(df["Windgeschw. (m/s)"].values)
+                risk_trend = calculate_trend(df["Risiko"].values)
 
-            st.write(f"Wellenhöhe Trend (Steigung pro Tag): {wave_trend:.3f} m/Tag")
-            st.write(f"Windgeschwindigkeit Trend (Steigung pro Tag): {wind_trend:.3f} m/s/Tag")
-            st.write(f"Risiko Trend (Steigung pro Tag): {risk_trend:.2f} Risiko-Punkte/Tag")
+                st.write(f"Wellenhöhe Trend (Steigung pro Tag): {wave_trend:.3f} m/Tag")
+                st.write(f"Windgeschwindigkeit Trend (Steigung pro Tag): {wind_trend:.3f} m/s/Tag")
+                st.write(f"Risiko Trend (Steigung pro Tag): {risk_trend:.2f} Risiko-Punkte/Tag")
 
-            fig, ax = plt.subplots(figsize=(10,4))
-            ax.plot(df["Datum"], df["Wellenhöhe (m)"], label="Wellenhöhe (m)")
-            ax.plot(df["Datum"], df["Windgeschw. (m/s)"], label="Windgeschwindigkeit (m/s)")
-            ax.plot(df["Datum"], df["Risiko"], label="Risiko")
-            ax.legend()
-            ax.set_xticklabels(df["Datum"], rotation=45, ha='right')
-            ax.set_title("Prognose und Risikoentwicklung (7 Tage)")
-            st.pyplot(fig)
+                fig, ax = plt.subplots(figsize=(10,4))
+                ax.plot(df["Datum"], df["Wellenhöhe (m)"], label="Wellenhöhe (m)")
+                ax.plot(df["Datum"], df["Windgeschw. (m/s)"], label="Windgeschwindigkeit (m/s)")
+                ax.plot(df["Datum"], df["Risiko"], label="Risiko")
+                ax.legend()
+                ax.set_xticklabels(df["Datum"], rotation=45, ha='right')
+                ax.set_title("Prognose und Risikoentwicklung (7 Tage)")
+                st.pyplot(fig)
 
-        route_coords = [
-            [origin_lon, origin_lat],
-            [dest_lon, dest_lat]
-        ]
+            # Beispielhafter Wasserweg (noch einfache Luftlinie)
+            route_coords = [
+                [origin_lon, origin_lat],
+                [dest_lon, dest_lat]
+            ]
 
-        route_layer = pdk.Layer(
-            "PathLayer",
-            data=[{"path": route_coords}],
-            get_path="path",
-            get_width=5,
-            get_color=[0, 100, 255],
-            width_min_pixels=3,
-        )
+            route_layer = pdk.Layer(
+                "PathLayer",
+                data=[{"path": route_coords}],
+                get_path="path",
+                get_width=5,
+                get_color=[0, 100, 255],
+                width_min_pixels=3,
+            )
 
-        midpoint_lon = np.mean([pt[0] for pt in route_coords])
-        midpoint_lat = np.mean([pt[1] for pt in route_coords])
+            midpoint_lon = np.mean([pt[0] for pt in route_coords])
+            midpoint_lat = np.mean([pt[1] for pt in route_coords])
 
-        view_state = pdk.ViewState(
-            longitude=midpoint_lon,
-            latitude=midpoint_lat,
-            zoom=3,
-            pitch=0,
-        )
+            view_state = pdk.ViewState(
+                longitude=midpoint_lon,
+                latitude=midpoint_lat,
+                zoom=3,
+                pitch=0,
+            )
 
-        st.subheader("🗺️ Geschätzte Schifffahrtsroute (Luftlinie)")
-        st.pydeck_chart(pdk.Deck(layers=[route_layer], initial_view_state=view_state))
+            st.subheader("🗺️ Geschätzte Schifffahrtsroute (Luftlinie)")
+            st.pydeck_chart(pdk.Deck(layers=[route_layer], initial_view_state=view_state))
