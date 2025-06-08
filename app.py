@@ -92,32 +92,47 @@ def generate_sea_waypoints(start_lat, start_lon, end_lat, end_lon, num_points=5)
     st.warning("Fallback-Route kann Landmassen kreuzen. Für präzise Seewege bitte vordefinierte Route verwenden.")
     return waypoints
 
-# Wetterdaten abrufen (kombinierte API-Anfrage)
+# Wetterdaten abrufen (separate API-Anfragen für wave_height und wind_speed_10m)
 @st.cache_data(ttl=3600)  # Cache für 1 Stunde
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
 def fetch_marine_weather_data(lat, lon, start_date):
     try:
-        start_iso = start_date.strftime("%Y-%m-%d")  # Nur YYYY-MM-DD
+        start_iso = start_date.strftime("%Y-%m-%d")  # YYYY-MM-DD
         end_date = start_date + timedelta(days=FORECAST_DAYS)
-        end_iso = end_date.strftime("%Y-%m-%d")  # Nur YYYY-MM-DD
+        end_iso = end_date.strftime("%Y-%m-%d")  # YYYY-MM-DD
 
-        # Kombinierte Marine API für Wellenhöhe und Windgeschwindigkeit
+        # Marine API für Wellenhöhe
         marine_url = (
             f"https://marine-api.open-meteo.com/v1/marine"
             f"?latitude={lat}&longitude={lon}"
-            f"&hourly=wave_height,wind_speed_10m"
+            f"&hourly=wave_height"
             f"&start_date={start_iso}&end_date={end_iso}"
         )
         marine_response = requests.get(marine_url, timeout=API_TIMEOUT)
         marine_response.raise_for_status()
         marine_data = marine_response.json()
 
-        if "hourly" not in marine_data or "wave_height" not in marine_data["hourly"] or "wind_speed_10m" not in marine_data["hourly"]:
+        if "hourly" not in marine_data or "wave_height" not in marine_data["hourly"]:
             raise ValueError("Unerwartetes API-Datenformat für Marine API")
 
         wave_heights = marine_data["hourly"]["wave_height"]
-        wind_speeds = marine_data["hourly"]["wind_speed_10m"]
-        times = marine_data["hourly"]["time"]
+
+        # Wetter API für Windgeschwindigkeit
+        weather_url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            f"&hourly=wind_speed_10m"
+            f"&start_date={start_iso}&end_date={end_iso}"
+        )
+        weather_response = requests.get(weather_url, timeout=API_TIMEOUT)
+        weather_response.raise_for_status()
+        weather_data = weather_response.json()
+
+        if "hourly" not in weather_data or "wind_speed_10m" not in weather_data["hourly"]:
+            raise ValueError("Unerwartetes API-Datenformat für Wetter API")
+
+        wind_speeds = weather_data["hourly"]["wind_speed_10m"]
+        times = weather_data["hourly"]["time"]
 
         forecast = []
         for t, w, wi in zip(times, wave_heights, wind_speeds):
