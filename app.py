@@ -38,9 +38,14 @@ ROUTE_WAYPOINTS = {
 @st.cache_data(ttl=86400)  # Cache für 24 Stunden
 def geocode_city(city_name):
     try:
+        # Spezifischere Suche für New York
+        if city_name.lower() == "new york":
+            query = "New York, NY, USA, port"
+        else:
+            query = f"{city_name}, port"
         response = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": city_name + ", port", "format": "json", "limit": 1},
+            params={"q": query, "format": "json", "limit": 1},
             headers={"User-Agent": "SeaRiskAIApp/1.0"},
             timeout=API_TIMEOUT
         )
@@ -48,9 +53,14 @@ def geocode_city(city_name):
         results = response.json()
         if results:
             lat, lon = float(results[0]["lat"]), float(results[0]["lon"])
-            # Verschiebe Koordinaten leicht ins Meer, falls zu nah an Land
+            # Plausibilitätsprüfung für New York
+            if city_name.lower() == "new york" and not (40.0 < lat < 41.0 and -75.0 < lon < -73.0):
+                st.warning(f"Falsche Koordinaten für New York: ({lat}, {lon}). Verwende Standardkoordinaten.")
+                return 40.7128, -74.0060  # Standardkoordinaten für New York
+            # Verschiebe Koordinaten ins Meer, falls nötig
             if not is_maritime(lat, lon):
                 lat, lon = adjust_to_sea(lat, lon)
+            st.write(f"Geocodierte Koordinaten für {city_name}: ({lat:.4f}, {lon:.4f})")
             return lat, lon
         else:
             st.error(f"Hafen {city_name} nicht gefunden.")
@@ -61,7 +71,6 @@ def geocode_city(city_name):
 
 # Heuristik, um zu prüfen, ob Koordinaten über Wasser liegen
 def is_maritime(lat, lon):
-    # Vereinfachte Prüfung: Marine API gibt Daten für maritime Koordinaten
     try:
         marine_url = (
             f"https://marine-api.open-meteo.com/v1/marine"
@@ -77,7 +86,6 @@ def is_maritime(lat, lon):
 
 # Koordinaten ins Meer verschieben (vereinfachte Heuristik)
 def adjust_to_sea(lat, lon):
-    # Verschiebe leicht nach Osten/Westen oder Norden/Süden, bis maritime Daten verfügbar
     offsets = [(0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)]
     for dlat, dlon in offsets:
         new_lat, new_lon = lat + dlat, lon + dlon
@@ -88,7 +96,6 @@ def adjust_to_sea(lat, lon):
 
 # Seewegpunkte generieren (Fallback für nicht vordefinierte Routen)
 def generate_sea_waypoints(start_lat, start_lon, end_lat, end_lon, num_points=5):
-    # Vereinfachte Heuristik: Erstelle Punkte und prüfe, ob sie über Wasser liegen
     lats = np.linspace(start_lat, end_lat, num_points)
     lons = np.linspace(start_lon, end_lon, num_points)
     waypoints = []
@@ -266,7 +273,7 @@ if st.button("Risikoanalyse starten"):
                     st.write(f"Gesamtentfernung (Seeweg): {total_distance:.2f} km")
                     st.write(f"Geschätzte Reisezeit: {travel_time_hours:.2f} Stunden ({travel_time_hours/24:.1f} Tage)")
 
-                    # Aktuelle und 7-Tage-Prognose Marisa
+                    # Aktuelle und 7-Tage-Prognose
                     st.subheader("Wetter- und Risikoprognose")
                     for wp_data in daily_forecasts:
                         st.write(f"Wegpunkt ({wp_data['lat']:.4f}, {wp_data['lon']:.4f})")
