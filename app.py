@@ -45,7 +45,7 @@ def fetch_open_meteo_forecast(lat, lon, start_dt, days=7):
     params = {
         "latitude": lat,
         "longitude": lon,
-        "hourly": "wave_height,wind_speed_10m",
+        "hourly": "wave_height,wind_speed",
         "start": start_iso,
         "end": end_iso,
         "timezone": "UTC"
@@ -58,7 +58,7 @@ def fetch_open_meteo_forecast(lat, lon, start_dt, days=7):
         hours = data.get("hourly", {})
         times = hours.get("time", [])
         waves = hours.get("wave_height", [])
-        winds = hours.get("wind_speed_10m", [])
+        winds = hours.get("wind_speed", [])
         forecast = []
 
         for t, w, ws in zip(times, waves, winds):
@@ -73,6 +73,7 @@ def fetch_open_meteo_forecast(lat, lon, start_dt, days=7):
     except Exception as e:
         st.warning(f"⚠️ Open-Meteo API Fehler: {e}")
         return []
+
 
 
 def compute_risk(wave, wind, vessel_factor):
