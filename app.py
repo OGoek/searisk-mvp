@@ -31,9 +31,9 @@ def geocode_place(place_name):
 
 # --- Open-Meteo API für Wind und Wellen (7-Tage Vorhersage, stündlich) ---
 def get_openmeteo_forecast(lat, lon, start_date):
-    start_iso = start_date.isoformat() + "T00:00"
+    start_iso = start_date.strftime("%Y-%m-%d")  # Nur Datum, kein Zeitanteil
     end_date = start_date + timedelta(days=7)
-    end_iso = end_date.isoformat() + "T23:59"
+    end_iso = end_date.strftime("%Y-%m-%d")      # Nur Datum
 
     url = "https://marine-api.open-meteo.com/v1/marine"
     params = {
