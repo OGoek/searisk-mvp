@@ -45,7 +45,7 @@ def fetch_open_meteo_forecast(lat, lon, start_dt, days=7):
     params = {
         "latitude": lat,
         "longitude": lon,
-        "hourly": "wave_height,wind_speed",
+        "hourly": ["wave_height", "wind_speed"],  # ✅ als Liste übergeben
         "start": start_iso,
         "end": end_iso,
         "timezone": "UTC"
