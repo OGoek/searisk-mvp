@@ -242,4 +242,32 @@ if st.button("Risikoanalyse starten"):
                 "risk": "Risiko"
             }))
 
-            wave_trend = calculate_trend(df["wave"].
+            wave_trend = calculate_trend(df["wave"].values)
+            wind_trend = calculate_trend(df["wind"].values)
+            risk_trend = calculate_trend(df["risk"].values)
+
+            st.write(f"Wellenhöhe Trend: {wave_trend:+.3f} m/Tag")
+            st.write(f"Windgeschwindigkeit Trend: {wind_trend:+.3f} m/s/Tag")
+            st.write(f"Risiko Trend: {risk_trend:+.3f} Punkte/Tag")
+
+            # Visualisierung der Risikoentwicklung
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(pd.to_datetime(df["time"]), df["risk"], marker="o", linestyle="-", color="red")
+            ax.set_title("Risikoentwicklung in den nächsten 7 Tagen")
+            ax.set_xlabel("Datum")
+            ax.set_ylabel("Risiko (0-100)")
+            ax.grid(True)
+            st.pyplot(fig)
+
+        # Karte mit Start- und Zielhafen
+        midpoint = [(origin_lat + dest_lat) / 2, (origin_lon + dest_lon) / 2]
+        route = pd.DataFrame({
+            'lat': [origin_lat, dest_lat],
+            'lon': [origin_lon, dest_lon]
+        })
+
+        st.subheader("🗺️ Schifffahrtsroute (gerade Linie)")
+        st.map(route.rename(columns={"lat": "latitude", "lon": "longitude"}))
+
+st.markdown("---")
+st.caption("© 2025 SeaRisk AI MVP")
