@@ -29,7 +29,7 @@ KNOWN_PORTS = {
     "istanbul": (41.0054, 28.9760)      # Istanbul, Türkei (Hafen Haydarpaşa)
 }
 
-# Vordefinierte Seewegpunkte für Rotterdam → New York
+# Vordefinierte Seewegpunkte
 ROUTE_WAYPOINTS = {
     ("rotterdam", "new york"): [
         (51.9225, 4.47917),   # Rotterdam
@@ -38,6 +38,17 @@ ROUTE_WAYPOINTS = {
         (48.0, -20.0),        # Mittlerer Atlantik
         (44.0, -40.0),        # Atlantik
         (40.7128, -74.0060)   # New York
+    ],
+    ("rotterdam", "istanbul"): [
+        (51.9225, 4.47917),   # Rotterdam
+        (51.0, 2.0),          # Ärmelkanal (offshore)
+        (49.0, -2.0),         # Atlantik vor Frankreich
+        (44.0, -8.0),         # Biskaya (offshore)
+        (36.0, -5.0),         # Straße von Gibraltar
+        (38.0, 5.0),          # Mittelmeer (westlich)
+        (38.0, 15.0),         # Mittelmeer (östlich)
+        (40.0, 26.0),         # Dardanellen (offshore)
+        (41.0054, 28.9760)    # Istanbul
     ]
 }
 
@@ -76,6 +87,7 @@ def generate_sea_waypoints(start_lat, start_lon, end_lat, end_lon, num_points=5)
     lats = np.linspace(start_lat, end_lat, num_points)
     lons = np.linspace(start_lon, end_lon, num_points)
     waypoints = list(zip(lats, lons))
+    st.warning("Fallback-Route kann Landmassen kreuzen. Für präzise Seewege bitte vordefinierte Route verwenden.")
     return waypoints
 
 # Wetterdaten abrufen
@@ -181,7 +193,7 @@ st.title("🚢 SeaRisk AI – Risikoanalyse")
 col1, col2 = st.columns(2)
 with col1:
     start_port = st.text_input("Start-Hafen eingeben (z. B. Rotterdam)", "Rotterdam")
-    end_port = st.text_input("Ziel-Hafen eingeben (z. B. New York)", "New York")
+    end_port = st.text_input("Ziel-Hafen eingeben (z. B. Istanbul)", "Istanbul")
 with col2:
     ship_type = st.selectbox("Schiffstyp", list(SHIP_TYPES.keys()))
     start_date = st.date_input("Startdatum", datetime.now().date())
