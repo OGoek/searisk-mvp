@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="SeaRisk AI MVP", layout="wide")
 
 # API Keys
-stormglass_api_key = "52eefa2a-4468-11f0-b16b-0242ac130006"
+stormglass_api_key = "52eefa2a-4468-11f0-b16b-0242ac130006-52eefa98-4468-11f0-b16b-0242ac130006"
 metno_headers = {
     "User-Agent": "(SeaRiskAIApp/1.0 ozan.goektas@gmail.com)"
 }
