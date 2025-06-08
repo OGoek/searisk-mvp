@@ -22,7 +22,14 @@ SHIP_TYPES = {
     "Feeder": 0.6
 }
 
-# Vordefinierte Seewegpunkte für Rotterdam → New York (nur über Wasser)
+# Vordefinierte Koordinaten für bekannte Häfen
+KNOWN_PORTS = {
+    "rotterdam": (51.9225, 4.47917),    # Rotterdam, Niederlande
+    "new york": (40.7128, -74.0060),    # New York City, USA
+    "istanbul": (41.0054, 28.9760)      # Istanbul, Türkei (Hafen Haydarpaşa)
+}
+
+# Vordefinierte Seewegpunkte für Rotterdam → New York
 ROUTE_WAYPOINTS = {
     ("rotterdam", "new york"): [
         (51.9225, 4.47917),   # Rotterdam
@@ -38,14 +45,16 @@ ROUTE_WAYPOINTS = {
 @st.cache_data(ttl=86400)  # Cache für 24 Stunden
 def geocode_city(city_name):
     try:
-        # Spezifischere Suche für New York
-        if city_name.lower() == "new york":
-            query = "New York, NY, USA, port"
-        else:
-            query = f"{city_name}, port"
+        # Verwende vordefinierte Koordinaten, wenn verfügbar
+        if city_name.lower() in KNOWN_PORTS:
+            lat, lon = KNOWN_PORTS[city_name.lower()]
+            st.write(f"Verwende vordefinierte Koordinaten für {city_name}: ({lat:.4f}, {lon:.4f})")
+            return lat, lon
+
+        # Nominatim-Suche für andere Häfen
         response = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": query, "format": "json", "limit": 1},
+            params={"q": f"{city_name}, port", "format": "json", "limit": 1},
             headers={"User-Agent": "SeaRiskAIApp/1.0"},
             timeout=API_TIMEOUT
         )
@@ -53,13 +62,6 @@ def geocode_city(city_name):
         results = response.json()
         if results:
             lat, lon = float(results[0]["lat"]), float(results[0]["lon"])
-            # Plausibilitätsprüfung für New York
-            if city_name.lower() == "new york" and not (40.0 < lat < 41.0 and -75.0 < lon < -73.0):
-                st.warning(f"Falsche Koordinaten für New York: ({lat}, {lon}). Verwende Standardkoordinaten.")
-                return 40.7128, -74.0060  # Standardkoordinaten für New York
-            # Verschiebe Koordinaten ins Meer, falls nötig
-            if not is_maritime(lat, lon):
-                lat, lon = adjust_to_sea(lat, lon)
             st.write(f"Geocodierte Koordinaten für {city_name}: ({lat:.4f}, {lon:.4f})")
             return lat, lon
         else:
@@ -69,42 +71,11 @@ def geocode_city(city_name):
         st.error(f"Geocoding-Fehler für {city_name}: {e}")
         return None
 
-# Heuristik, um zu prüfen, ob Koordinaten über Wasser liegen
-def is_maritime(lat, lon):
-    try:
-        marine_url = (
-            f"https://marine-api.open-meteo.com/v1/marine"
-            f"?latitude={lat}&longitude={lon}&hourly=wave_height"
-            f"&start_date={datetime.now().strftime('%Y-%m-%d')}"
-            f"&end_date={datetime.now().strftime('%Y-%m-%d')}"
-        )
-        response = requests.get(marine_url, timeout=API_TIMEOUT)
-        data = response.json()
-        return "hourly" in data and "wave_height" in data["hourly"] and data["hourly"]["wave_height"][0] is not None
-    except:
-        return False
-
-# Koordinaten ins Meer verschieben (vereinfachte Heuristik)
-def adjust_to_sea(lat, lon):
-    offsets = [(0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)]
-    for dlat, dlon in offsets:
-        new_lat, new_lon = lat + dlat, lon + dlon
-        if is_maritime(new_lat, new_lon):
-            return new_lat, new_lon
-    st.warning(f"Konnte keinen maritimen Punkt für ({lat}, {lon}) finden.")
-    return lat, lon
-
 # Seewegpunkte generieren (Fallback für nicht vordefinierte Routen)
 def generate_sea_waypoints(start_lat, start_lon, end_lat, end_lon, num_points=5):
     lats = np.linspace(start_lat, end_lat, num_points)
     lons = np.linspace(start_lon, end_lon, num_points)
-    waypoints = []
-    for lat, lon in zip(lats, lons):
-        if is_maritime(lat, lon):
-            waypoints.append((lat, lon))
-        else:
-            adjusted_lat, adjusted_lon = adjust_to_sea(lat, lon)
-            waypoints.append((adjusted_lat, adjusted_lon))
+    waypoints = list(zip(lats, lons))
     return waypoints
 
 # Wetterdaten abrufen
@@ -229,7 +200,7 @@ if st.button("Risikoanalyse starten"):
                     waypoints = ROUTE_WAYPOINTS[route_key][1:-1]  # Ohne Start- und Zielpunkt
                     all_points = [start_coords] + waypoints + [end_coords]
                 else:
-                    st.warning("Keine vordefinierte Seeweg-Route verfügbar. Verwende vereinfachte maritime Route.")
+                    st.warning("Keine vordefinierte Seeweg-Route verfügbar. Verwende vereinfachte Route.")
                     waypoints = generate_sea_waypoints(start_coords[0], start_coords[1], end_coords[0], end_coords[1])
                     all_points = [start_coords] + waypoints + [end_coords]
 
