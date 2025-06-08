@@ -31,44 +31,50 @@ def geocode_place(place_name):
 
 # --- Open-Meteo API für Wind und Wellen (7-Tage Vorhersage, stündlich) ---
 def get_openmeteo_forecast(lat, lon, start_date):
-    start_iso = start_date.strftime("%Y-%m-%d")  # Nur Datum, kein Zeitanteil
-    end_date = start_date + timedelta(days=7)
-    end_iso = end_date.strftime("%Y-%m-%d")      # Nur Datum
+    start_iso = start_date.strftime("%Y-%m-%d")
+    end_date = (start_date + timedelta(days=7)).strftime("%Y-%m-%d")
 
-    url = "https://marine-api.open-meteo.com/v1/marine"
-    params = {
+    base_url = "https://marine-api.open-meteo.com/v1/marine"
+    
+    # Anfrage für wave_height
+    params_wave = {
         "latitude": lat,
         "longitude": lon,
-        "hourly": "wave_height,wind_speed_10m",
+        "hourly": "wave_height",
         "start": start_iso,
-        "end": end_iso,
+        "end": end_date,
         "timezone": "UTC"
     }
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        hours = data.get("hourly", {})
-        times = hours.get("time", [])
-        waves = hours.get("wave_height", [])
-        winds = hours.get("wind_speed_10m", [])
+    response_wave = requests.get(base_url, params=params_wave)
+    response_wave.raise_for_status()
+    data_wave = response_wave.json()
+    
+    # Anfrage für wind_speed_10m
+    params_wind = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "wind_speed_10m",
+        "start": start_iso,
+        "end": end_date,
+        "timezone": "UTC"
+    }
+    response_wind = requests.get(base_url, params=params_wind)
+    response_wind.raise_for_status()
+    data_wind = response_wind.json()
 
-        forecast = []
-        # Wir nehmen jeweils Tageswerte (Mittelwert pro Tag)
-        for day_idx in range(7):
-            day_waves = waves[day_idx*24:(day_idx+1)*24]
-            day_winds = winds[day_idx*24:(day_idx+1)*24]
-            day_time = times[day_idx*24][:10]  # YYYY-MM-DD
-            if len(day_waves) == 0 or len(day_winds) == 0:
-                continue
-            avg_wave = np.mean(day_waves)
-            avg_wind = np.mean(day_winds)
-            forecast.append({
-                "time": day_time,
-                "wave": avg_wave,
-                "wind": avg_wind
-            })
-        return forecast
+    # Daten zusammenführen, Annahme: gleiche Zeitstempel
+    times = data_wave['hourly']['time']
+    wave_heights = data_wave['hourly']['wave_height']
+    wind_speeds = data_wind['hourly']['wind_speed_10m']
+
+    forecast = []
+    for t, wv, ws in zip(times, wave_heights, wind_speeds):
+        forecast.append({
+            "time": t,
+            "wave": wv,
+            "wind": ws
+        })
+    return forecast
     except Exception as e:
         st.warning(f"⚠️ Open-Meteo API Fehler: {e}")
         return []
