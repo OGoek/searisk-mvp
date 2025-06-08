@@ -6,6 +6,7 @@ from streamlit_folium import folium_static
 from geopy.distance import geodesic
 from datetime import datetime, timedelta
 import pandas as pd
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Konfiguration
 st.set_page_config(page_title="SeaRisk AI MVP", layout="wide")
@@ -54,6 +55,7 @@ ROUTE_WAYPOINTS = {
 
 # Geocoding-Funktion mit Caching
 @st.cache_data(ttl=86400)  # Cache für 24 Stunden
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
 def geocode_city(city_name):
     try:
         # Verwende vordefinierte Koordinaten, wenn verfügbar
@@ -90,46 +92,32 @@ def generate_sea_waypoints(start_lat, start_lon, end_lat, end_lon, num_points=5)
     st.warning("Fallback-Route kann Landmassen kreuzen. Für präzise Seewege bitte vordefinierte Route verwenden.")
     return waypoints
 
-# Wetterdaten abrufen
+# Wetterdaten abrufen (kombinierte API-Anfrage)
 @st.cache_data(ttl=3600)  # Cache für 1 Stunde
-def fetch_weather_data(lat, lon, start_date):
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+def fetch_marine_weather_data(lat, lon, start_date):
     try:
-        start_iso = start_date.strftime("%Y-%m-%d")
+        start_iso = start_date.strftime("%Y-%m-%dT00:00")
         end_date = start_date + timedelta(days=FORECAST_DAYS)
-        end_iso = end_date.strftime("%Y-%m-%d")
+        end_iso = end_date.strftime("%Y-%m-%dT23:59")
 
-        # Marine API für Wellenhöhe
+        # Kombinierte Marine API für Wellenhöhe und Windgeschwindigkeit
         marine_url = (
             f"https://marine-api.open-meteo.com/v1/marine"
             f"?latitude={lat}&longitude={lon}"
-            f"&hourly=wave_height"
+            f"&hourly=wave_height,wind_speed_10m"
             f"&start_date={start_iso}&end_date={end_iso}"
         )
         marine_response = requests.get(marine_url, timeout=API_TIMEOUT)
         marine_response.raise_for_status()
         marine_data = marine_response.json()
 
-        if "hourly" not in marine_data or "wave_height" not in marine_data["hourly"]:
+        if "hourly" not in marine_data or "wave_height" not in marine_data["hourly"] or "wind_speed_10m" not in marine_data["hourly"]:
             raise ValueError("Unerwartetes API-Datenformat für Marine API")
 
         wave_heights = marine_data["hourly"]["wave_height"]
-
-        # Weather API für Windgeschwindigkeit
-        weather_url = (
-            f"https://api.open-meteo.com/v1/forecast"
-            f"?latitude={lat}&longitude={lon}"
-            f"&hourly=wind_speed_10m"
-            f"&start_date={start_iso}&end_date={end_iso}"
-        )
-        weather_response = requests.get(weather_url, timeout=API_TIMEOUT)
-        weather_response.raise_for_status()
-        weather_data = weather_response.json()
-
-        if "hourly" not in weather_data or "wind_speed_10m" not in weather_data["hourly"]:
-            raise ValueError("Unerwartetes API-Datenformat für Weather API")
-
-        wind_speeds = weather_data["hourly"]["wind_speed_10m"]
-        times = weather_data["hourly"]["time"]
+        wind_speeds = marine_data["hourly"]["wind_speed_10m"]
+        times = marine_data["hourly"]["time"]
 
         forecast = []
         for t, w, wi in zip(times, wave_heights, wind_speeds):
@@ -160,21 +148,27 @@ def compute_waypoint_risk(forecast, ship_type):
         base_risk = 0
         if max_wave > 4:
             base_risk += 40
+            risk_reason = "Hohe Wellen"
         elif max_wave > 2:
             base_risk += 20
+            risk_reason = "Moderate Wellen"
         else:
             base_risk += 5
+            risk_reason = "Niedrige Wellen"
 
         if max_wind > 15:
             base_risk += 40
+            risk_reason += ", Starker Wind"
         elif max_wind > 8:
             base_risk += 20
+            risk_reason += ", Moderater Wind"
         else:
             base_risk += 5
+            risk_reason += ", Schwacher Wind"
 
         ship_factor = SHIP_TYPES[ship_type]
         risk = min(int(base_risk * (1.2 - ship_factor)), 100)
-        daily_risks.append({"date": date, "risk": risk, "wave_height": max_wave, "wind_speed": max_wind})
+        daily_risks.append({"date": date, "risk": risk, "wave_height": max_wave, "wind_speed": max_wind, "reason": risk_reason})
 
     return daily_risks
 
@@ -216,10 +210,19 @@ if st.button("Risikoanalyse starten"):
                     waypoints = generate_sea_waypoints(start_coords[0], start_coords[1], end_coords[0], end_coords[1])
                     all_points = [start_coords] + waypoints + [end_coords]
 
+                # Ladebalken für Wetterdaten
+                progress_bar = st.progress(0)
                 waypoint_risks = []
                 daily_forecasts = []
-                for wp in all_points:
-                    forecast = fetch_weather_data(wp[0], wp[1], start_date)
+                total_distance = 0
+                distances = []
+                for i in range(len(all_points) - 1):
+                    dist = geodesic(all_points[i], all_points[i+1]).km
+                    total_distance += dist
+                    distances.append(dist)
+
+                for i, wp in enumerate(all_points):
+                    forecast = fetch_marine_weather_data(wp[0], wp[1], start_date)
                     daily_risks = compute_waypoint_risk(forecast, ship_type)
                     if daily_risks:
                         max_risk = max([dr["risk"] for dr in daily_risks])
@@ -232,9 +235,12 @@ if st.button("Risikoanalyse starten"):
                     else:
                         st.warning(f"Keine Wetterdaten für Wegpunkt ({wp[0]:.4f}, {wp[1]:.4f})")
                         waypoint_risks.append(0)
+                    progress_bar.progress((i + 1) / len(all_points))
 
                 if waypoint_risks and any(r > 0 for r in waypoint_risks):
-                    total_risk = np.mean([r for r in waypoint_risks if r > 0])
+                    # Gewichtetes Risiko basierend auf Streckenlänge
+                    weighted_risks = [r * d for r, d in zip(waypoint_risks, distances + [0])]
+                    total_risk = sum(weighted_risks) / total_distance if total_distance > 0 else 0
                     st.success(f"Gesamtrisiko für die Seeweg-Route {start_port} → {end_port}: {total_risk:.2f}%")
 
                     # Karte erstellen
@@ -247,22 +253,25 @@ if st.button("Risikoanalyse starten"):
                     folium.PolyLine(all_points, color='blue').add_to(m)
                     folium_static(m)
 
-                    # Entfernung und Reisezeit berechnen
-                    total_distance = 0
-                    for i in range(len(all_points) - 1):
-                        total_distance += geodesic(all_points[i], all_points[i+1]).km
+                    # Entfernung und Reisezeit
                     speed_kmh = 37  # 20 knots ≈ 37 km/h
                     travel_time_hours = total_distance / speed_kmh
                     st.write(f"Gesamtentfernung (Seeweg): {total_distance:.2f} km")
                     st.write(f"Geschätzte Reisezeit: {travel_time_hours:.2f} Stunden ({travel_time_hours/24:.1f} Tage)")
 
-                    # Aktuelle und 7-Tage-Prognose
+                    # Wetter- und Risikoprognose
                     st.subheader("Wetter- und Risikoprognose")
                     for wp_data in daily_forecasts:
                         st.write(f"Wegpunkt ({wp_data['lat']:.4f}, {wp_data['lon']:.4f})")
                         df = pd.DataFrame(wp_data["daily_risks"])
-                        df = df[["date", "wave_height", "wind_speed", "risk"]]
-                        df.columns = ["Datum", "Wellenhöhe (m)", "Windgeschw. (m/s)", "Risiko (%)"]
+                        df = df[["date", "wave_height", "wind_speed", "risk", "reason"]]
+                        df.columns = ["Datum", "Wellenhöhe (m)", "Windgeschw. (m/s)", "Risiko (%)", "Risikogrund"]
                         st.dataframe(df, use_container_width=True)
+
+                    # CSV-Export
+                    if st.button("Ergebnisse als CSV exportieren"):
+                        df = pd.concat([pd.DataFrame(wp_data["daily_risks"]).assign(Wegpunkt=f"({wp_data['lat']:.4f}, {wp_data['lon']:.4f})") for wp_data in daily_forecasts])
+                        csv = df.to_csv(index=False)
+                        st.download_button("Download CSV", csv, "route_risk.csv", "text/csv")
                 else:
                     st.error("Keine ausreichenden Wetterdaten für die Risikoberechnung.")
