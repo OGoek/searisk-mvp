@@ -1,4 +1,6 @@
 import streamlit as st
+import pandas as pd
+import pydeck as pdk
 
 st.set_page_config(page_title="SeaRisk AI MVP", page_icon="🌊")
 
@@ -31,7 +33,6 @@ with st.form("risk_form"):
 
     submit = st.form_submit_button("Risiko berechnen")
 
-# Risikologik (Dummy-Modell)
 if submit:
     # Basis-Risiko
     risk_score = 0
@@ -54,7 +55,7 @@ if submit:
     else:
         risk_score += 15
 
-        # Schiffstyp-Risiko
+    # Schiffstyp-Risiko
     if "Feeder" in ship_type:
         risk_score += 25
     elif "Panamax" in ship_type:
@@ -82,3 +83,47 @@ if submit:
 
     st.caption("Hinweis: Risikomodell basiert auf vereinfachten Annahmen zu Saison, Region und Schiffstyp.")
 
+    # Dummy-Koordinaten für ausgewählte Häfen
+    ports = {
+        "Rotterdam": [4.47917, 51.9225],
+        "New York": [-74.006, 40.7128],
+        "Genua": [8.9463, 44.4056],
+        "Alexandria": [29.9187, 31.2001],
+        "Shanghai": [121.4737, 31.2304],
+        "Singapur": [103.8198, 1.3521]
+    }
+
+    origin_coords = ports.get(origin, [0, 0])
+    dest_coords = ports.get(destination, [0, 0])
+
+    st.subheader("🗺️ Routenkarte")
+
+    route_data = pd.DataFrame({
+        'from_lon': [origin_coords[0]],
+        'from_lat': [origin_coords[1]],
+        'to_lon': [dest_coords[0]],
+        'to_lat': [dest_coords[1]]
+    })
+
+    layer = pdk.Layer(
+        "LineLayer",
+        route_data,
+        get_source_position='[from_lon, from_lat]',
+        get_target_position='[to_lon, to_lat]',
+        get_width=4,
+        get_color=[255, 100, 100],
+        pickable=True
+    )
+
+    view_state = pdk.ViewState(
+        longitude=(origin_coords[0] + dest_coords[0]) / 2,
+        latitude=(origin_coords[1] + dest_coords[1]) / 2,
+        zoom=2,
+        pitch=0
+    )
+
+    st.pydeck_chart(pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        tooltip={"text": f"{origin} → {destination}"}
+    ))
