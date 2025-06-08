@@ -5,3 +5,4 @@ folium>=0.17.0
 streamlit-folium>=0.20.0
 geopy>=2.4.0
 pandas>=2.2.0
+tenacity>=8.2.3
