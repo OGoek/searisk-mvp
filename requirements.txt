@@ -1,7 +1,7 @@
-streamlit
-requests
-pandas
-pydeck
-matplotlib
-plotly.express
-folium
+streamlit>=1.31.0
+requests>=2.31.0
+numpy>=1.26.0
+folium>=0.17.0
+streamlit-folium>=0.20.0
+geopy>=2.4.0
+pandas>=2.2.0
