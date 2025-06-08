@@ -8,21 +8,12 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="SeaRisk AI MVP", layout="wide")
 
-# API Keys
-stormglass_api_key = "52eefa2a-4468-11f0-b16b-0242ac130006-52eefa98-4468-11f0-b16b-0242ac130006"
+# API Keys & Headers
+stormglass_api_key = "52eefa2a-4468-11f0-b16b-0242ac130006"  # deinen Key hier einsetzen
 metno_headers = {
     "User-Agent": "(SeaRiskAIApp/1.0 ozan.goektas@gmail.com)"
 }
 
-# Beispiel-Portkoordinaten (Lat, Lon)
-port_coords = {
-    "Rotterdam": (51.95, 4.13),
-    "Hamburg": (53.54, 9.98),
-    "New York": (40.7128, -74.0060),
-    "Singapur": (1.2644, 103.8406),
-}
-
-# Risikoberechnung
 def compute_risk(wave, wind, vessel_type):
     risk = 0
     if wave > 4:
@@ -39,9 +30,7 @@ def compute_risk(wave, wind, vessel_type):
     else:
         risk += 5
 
-    if vessel_type in ["Fischkutter", "Fähre"]:
-        risk += 10
-
+    # Kein Extra-Risiko für Fischkutter/Fähre mehr
     return min(risk, 100)
 
 def calculate_trend(values):
@@ -52,8 +41,7 @@ def calculate_trend(values):
     a, _ = np.polyfit(x, y, 1)
     return a
 
-# API Abrufe
-def get_stormglass_data(lat, lon, start_dt, end_dt, is_historical=False):
+def get_stormglass_data(lat, lon, start_dt, end_dt):
     url = "https://api.stormglass.io/v2/weather/point"
     params = {
         'lat': lat,
@@ -85,7 +73,7 @@ def get_metno_forecast(lat, lon):
         response.raise_for_status()
         timeseries = response.json().get("properties", {}).get("timeseries", [])
         forecast = []
-        for t in timeseries[:7*24:24]:  # je 24h ein Wert
+        for t in timeseries[:7*24:24]:
             details = t["data"]["instant"]["details"]
             wave = details.get("significantWaveHeight", 0)
             wind = details.get("windSpeed", 0)
@@ -99,35 +87,43 @@ def get_metno_forecast(lat, lon):
         st.warning(f"⚠️ Met.no API Fehler: {e}")
         return []
 
-# Streamlit UI
 st.title("🚢 SeaRisk AI MVP")
 
+st.subheader("Hafen Koordinaten manuell eingeben")
+
 col1, col2 = st.columns(2)
-
 with col1:
-    origin = st.selectbox("Start-Hafen wählen", list(port_coords.keys()))
-    destination = st.selectbox("Ziel-Hafen wählen", list(port_coords.keys()))
-    vessel_type = st.selectbox("Schiffstyp", ["Containerschiff", "Fischkutter", "Fähre", "Tanker"])
-
+    origin_lat = st.number_input("Start Hafen Latitude", value=51.95, format="%.5f")
+    origin_lon = st.number_input("Start Hafen Longitude", value=4.13, format="%.5f")
 with col2:
-    start_date = st.date_input("Startdatum", datetime.utcnow().date())
-    st.write("**Hinweis:** Die Prognose umfasst 7 Tage ab Startdatum.")
+    dest_lat = st.number_input("Ziel Hafen Latitude", value=40.7128, format="%.5f")
+    dest_lon = st.number_input("Ziel Hafen Longitude", value=-74.0060, format="%.5f")
+
+vessel_type = st.selectbox("Schiffstyp auswählen", [
+    "Containerschiff",
+    "Bulker",
+    "Panamax",
+    "Kümo",
+    "Tanker",
+    "Supertanker"
+])
+
+start_date = st.date_input("Startdatum der Analyse", datetime.utcnow().date())
+st.write("**Hinweis:** Die Prognose umfasst 7 Tage ab Startdatum.")
 
 if st.button("Risikoanalyse starten"):
-    if origin == destination:
+    if (origin_lat == dest_lat) and (origin_lon == dest_lon):
         st.error("Start- und Zielhafen müssen unterschiedlich sein.")
     else:
-        origin_lat, origin_lon = port_coords[origin]
-        dest_lat, dest_lon = port_coords[destination]
+        st.subheader("📍 Eingabedaten")
+        st.write(f"Start Hafen: ({origin_lat:.5f}, {origin_lon:.5f})")
+        st.write(f"Ziel Hafen: ({dest_lat:.5f}, {dest_lon:.5f})")
+        st.write(f"Schiffstyp: {vessel_type}")
+        st.write(f"Startdatum: {start_date}")
 
-        st.subheader("📍 Hafenkoordinaten")
-        st.write(f"{origin}: ({origin_lat:.4f}, {origin_lon:.4f})")
-        st.write(f"{destination}: ({dest_lat:.4f}, {dest_lon:.4f})")
-
-        # Historische Daten (letzte 30 Tage bis heute)
         end_hist = datetime.utcnow()
         start_hist = end_hist - timedelta(days=30)
-        hist_data = get_stormglass_data(origin_lat, origin_lon, start_hist, end_hist, is_historical=True)
+        hist_data = get_stormglass_data(origin_lat, origin_lon, start_hist, end_hist)
 
         if not hist_data:
             st.warning("Keine historischen Daten verfügbar.")
@@ -137,7 +133,6 @@ if st.button("Risikoanalyse starten"):
             st.subheader("⚓ Generelles Risiko basierend auf historischen Daten (letzte 30 Tage)")
             st.write(f"📈 Durchschnittliches Risiko: **{avg_hist_risk:.1f} / 100**")
 
-        # Prognose Daten (7 Tage ab Startdatum)
         start_forecast = datetime.combine(start_date, datetime.min.time())
         end_forecast = start_forecast + timedelta(days=7)
 
@@ -170,30 +165,25 @@ if st.button("Risikoanalyse starten"):
                 "risk": "Risiko"
             }))
 
-            wave_trend = calculate_trend(df["wave"].values)
-            wind_trend = calculate_trend(df["wind"].values)
-            risk_trend = calculate_trend(df["risk"].values)
+            wave_trend = calculate_trend(df["Wellenhöhe (m)"].values)
+            wind_trend = calculate_trend(df["Windgeschw. (m/s)"].values)
+            risk_trend = calculate_trend(df["Risiko"].values)
 
             st.write(f"Wellenhöhe Trend (Steigung pro Tag): {wave_trend:.3f} m/Tag")
             st.write(f"Windgeschwindigkeit Trend (Steigung pro Tag): {wind_trend:.3f} m/s/Tag")
             st.write(f"Risiko Trend (Steigung pro Tag): {risk_trend:.2f} Risiko-Punkte/Tag")
 
-            # Diagramm mit matplotlib
             fig, ax = plt.subplots(figsize=(10,4))
-            ax.plot(df["time"], df["wave"], label="Wellenhöhe (m)")
-            ax.plot(df["time"], df["wind"], label="Windgeschwindigkeit (m/s)")
-            ax.plot(df["time"], df["risk"], label="Risiko")
+            ax.plot(df["Datum"], df["Wellenhöhe (m)"], label="Wellenhöhe (m)")
+            ax.plot(df["Datum"], df["Windgeschw. (m/s)"], label="Windgeschwindigkeit (m/s)")
+            ax.plot(df["Datum"], df["Risiko"], label="Risiko")
             ax.legend()
-            ax.set_xticks(range(len(df["time"])))
-            ax.set_xticklabels(df["time"], rotation=45, ha='right')
+            ax.set_xticklabels(df["Datum"], rotation=45, ha='right')
             ax.set_title("Prognose und Risikoentwicklung (7 Tage)")
             st.pyplot(fig)
 
-        # Beispielhafte Wasserweg-Route (hier z.B. Rotterdam → Dover → Atlantik → New York)
         route_coords = [
             [origin_lon, origin_lat],
-            [1.8, 50.9],      # Ärmelkanal (Dover)
-            [-10.0, 45.0],    # Mittlerer Atlantik
             [dest_lon, dest_lat]
         ]
 
@@ -207,14 +197,8 @@ if st.button("Risikoanalyse starten"):
         )
 
         midpoint_lon = np.mean([pt[0] for pt in route_coords])
-        midpoint_lat = np.mean([pt[1] for pt in route_coords])
+        midpoint_lat = np.mean([pt[1] for pt in
 
-        view_state = pdk.ViewState(
-            longitude=midpoint_lon,
-            latitude=midpoint_lat,
-            zoom=3,
-            pitch=0,
-        )
 
         st.subheader("🗺️ Geschätzte Schifffahrtsroute")
         st.pydeck_chart(pdk.Deck(layers=[route_layer], initial_view_state=view_state))
