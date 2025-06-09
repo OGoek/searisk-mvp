@@ -140,6 +140,9 @@ def fetch_openseamap_data(min_lat, min_lon, max_lat, max_lon):
         # Konvertiere Overpass-Daten in GeoJSON
         geojson = {"type": "FeatureCollection", "features": []}
         for element in data.get("elements", []):
+            # Prüfe, ob "tags" existiert und "seamark:type" enthalten ist
+            if "tags" not in element or "seamark:type" not in element["tags"]:
+                continue  # Ignoriere Elemente ohne seamark:type
             if element["type"] == "node":
                 feature = {
                     "type": "Feature",
@@ -151,7 +154,6 @@ def fetch_openseamap_data(min_lat, min_lon, max_lat, max_lon):
                 }
                 geojson["features"].append(feature)
             elif element["type"] == "way":
-                # Für Ways (z. B. Häfen) die Geometrie aus den Knoten erstellen
                 coords = []
                 for node_id in element.get("nodes", []):
                     for node in data["elements"]:
@@ -167,10 +169,29 @@ def fetch_openseamap_data(min_lat, min_lon, max_lat, max_lon):
                         "properties": element.get("tags", {})
                     }
                     geojson["features"].append(feature)
+        if not geojson["features"]:
+            st.warning("Keine gültigen OpenSeaMap-Daten gefunden. Karte wird ohne nautische Marker angezeigt.")
         return geojson
     except Exception as e:
         st.warning(f"Fehler beim Abrufen der OpenSeaMap-Daten: {e}")
         return {"type": "FeatureCollection", "features": []}
+
+# In der Streamlit UI (Anpassung der style_function)
+# ... (Rest des Codes unverändert bis zur style_function) ...
+
+# OpenSeaMap GeoJSON-Layer hinzufügen
+def style_function(feature):
+    # Robustere Behandlung von fehlenden properties
+    properties = feature.get("properties", {})
+    seamark_type = properties.get("seamark:type", "unknown")
+    colors = {
+        "buoy_lateral": "purple",
+        "buoy_cardinal": "orange",
+        "lighthouse": "red",
+        "harbour": "green",
+        "dock": "blue"
+    }
+    return {"color": colors.get(seamark_type, "gray"), "weight": 3}
 
 # Wetterdaten abrufen (separate API-Anfragen für wave_height und wind_speed_10m)
 @st.cache_data(ttl=3600)  # Cache für 1 Stunde
