@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential
 import json
+# Neue Importe für maschinelles Lernen
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 
 # Konfiguration
 st.set_page_config(page_title="SeaRisk AI MVP", layout="wide")
@@ -22,6 +25,12 @@ SHIP_TYPES = {
     "Supramax": 0.7,
     "Bulker": 0.85,
     "Feeder": 0.6
+}
+# Neue Konstante für Ladungssicherung
+CARGO_SECURITY_FACTORS = {
+    "Standard": 1.0,
+    "Verstärkt": 0.8,
+    "Hoch": 0.6
 }
 
 # Vordefinierte Koordinaten für bekannte Häfen
@@ -53,6 +62,26 @@ ROUTE_WAYPOINTS = {
         (41.0054, 28.9760)    # Istanbul
     ]
 }
+
+# KI-Modell initialisieren (Random Forest)
+@st.cache_resource
+def load_risk_model():
+    # Synthetischer Datensatz für Containerverluste (ersetze durch echte Daten)
+    data = pd.DataFrame({
+        "wave_height": [2, 4, 6, 1, 5, 3, 7, 2, 4, 8],
+        "wind_speed": [10, 15, 20, 5, 18, 8, 25, 6, 12, 22],
+        "ship_size": [50000, 80000, 60000, 40000, 70000, 50000, 90000, 45000, 65000, 80000],
+        "cargo_security": [1.0, 0.8, 1.0, 0.6, 0.8, 1.0, 1.0, 0.6, 0.8, 1.0],  # Standard=1.0, Verstärkt=0.8, Hoch=0.6
+        "loss_occurred": [0, 1, 1, 0, 1, 0, 1, 0, 0, 1]
+    })
+    X = data[["wave_height", "wind_speed", "ship_size", "cargo_security"]]
+    y = data["loss_occurred"]
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    return model
+
+risk_model = load_risk_model()
 
 # Geocoding-Funktion mit Caching
 @st.cache_data(ttl=86400)  # Cache für 24 Stunden
@@ -194,8 +223,8 @@ def fetch_marine_weather_data(lat, lon, start_date):
         st.warning(f"Fehler beim Abrufen der Wetterdaten für ({lat:.4f}, {lon:.4f}): {e}")
         return []
 
-# Risiko für einen Wegpunkt berechnen
-def compute_waypoint_risk(forecast, ship_type):
+# Risiko für einen Wegpunkt berechnen (angepasst für maschinelles Lernen)
+def compute_waypoint_risk(forecast, ship_type, cargo_security):
     if not forecast:
         return None
 
@@ -208,39 +237,28 @@ def compute_waypoint_risk(forecast, ship_type):
         daily_data[date]["wind_speeds"].append(entry["wind_speed"])
 
     daily_risks = []
+    ship_factor = SHIP_TYPES[ship_type]
+    cargo_factor = CARGO_SECURITY_FACTORS[cargo_security]
     for date, data in daily_data.items():
         max_wave = max(data["wave_heights"])
         max_wind = max(data["wind_speeds"])
-        base_risk = 0
-        risk_reason = []
-        if max_wave > 4:
-            base_risk += 40
-            risk_reason.append("Hohe Wellen")
-        elif max_wave > 2:
-            base_risk += 20
-            risk_reason.append("Moderate Wellen")
-        else:
-            base_risk += 5
-            risk_reason.append("Niedrige Wellen")
-
-        if max_wind > 15:
-            base_risk += 40
-            risk_reason.append("Starker Wind")
-        elif max_wind > 8:
-            base_risk += 20
-            risk_reason.append("Moderater Wind")
-        else:
-            base_risk += 5
-            risk_reason.append("Schwacher Wind")
-
-        ship_factor = SHIP_TYPES[ship_type]
-        risk = min(int(base_risk * (1.2 - ship_factor)), 100)
+        # Feature-Vorbereitung für das KI-Modell
+        features = pd.DataFrame({
+            "wave_height": [max_wave],
+            "wind_speed": [max_wind],
+            "ship_size": [50000],  # Beispielwert, anpassen an echte Daten
+            "cargo_security": [cargo_factor]
+        })
+        # Risikowahrscheinlichkeit mit Random Forest vorhersagen
+        risk_prob = risk_model.predict_proba(features)[0][1] * 100  # Wahrscheinlichkeit in %
+        # Anpassung basierend auf Schiffstyp und Ladungssicherung
+        adjusted_risk = min(risk_prob * (1.2 - ship_factor) * cargo_factor, 100)
         daily_risks.append({
             "date": date,
-            "risk": risk,
+            "risk": int(adjusted_risk),
             "wave_height": max_wave,
             "wind_speed": max_wind,
-            "reason": ", ".join(risk_reason)
+            "reason": f"KI-Vorhersage (Wellen: {max_wave:.1f} m, Wind: {max_wind:.1f} m/s, Ladung: {cargo_security})"
         })
 
     return daily_risks
@@ -254,7 +272,7 @@ def get_risk_color(risk):
     else:
         return 'red'
 
-# Streamlit UI
+# Streamlit UI (mit neuer Eingabe für Ladungssicherung)
 st.title("🚢 SeaRisk AI – Risikoanalyse")
 
 col1, col2 = st.columns(2)
@@ -263,6 +281,7 @@ with col1:
     end_port = st.text_input("Ziel-Hafen eingeben (z. B. Istanbul)", "Istanbul")
 with col2:
     ship_type = st.selectbox("Schiffstyp", list(SHIP_TYPES.keys()))
+    cargo_security = st.selectbox("Ladungssicherung", list(CARGO_SECURITY_FACTORS.keys()), index=0)  # Neue Eingabe
     start_date = st.date_input("Startdatum", datetime.now().date())
 
 if st.button("Risikoanalyse starten"):
@@ -305,7 +324,7 @@ if st.button("Risikoanalyse starten"):
 
                 for i, wp in enumerate(all_points):
                     forecast = fetch_marine_weather_data(wp[0], wp[1], start_date)
-                    daily_risks = compute_waypoint_risk(forecast, ship_type)
+                    daily_risks = compute_waypoint_risk(forecast, ship_type, cargo_security)  # Angepasster Aufruf
                     if daily_risks:
                         max_risk = max([dr["risk"] for dr in daily_risks])
                         waypoint_risks.append(max_risk)
