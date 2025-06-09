@@ -601,49 +601,5 @@ def compute_waypoint_risk(forecast, ship_type, cargo_security):
         adjusted_risk = min(risk_prob * (1.2 - ship_factor) * cargo_factor, 100)
         daily_risks.append({
             "date": date,
- Dualität bleibt erhalten, und die App ist robust gegen API-Fehler.
 
-### **Details der Bereinigung**
-1. **Fehlerbehebung (OpenSeaMap)**:
-   - **fetch_openseamap_data**: Filtert Elemente ohne `tags` oder `seamark:type`, um `KeyError` zu vermeiden.
-   - **style_function**: Nutzt `feature.get("properties", {})` für sicheren Zugriff.
-   - **Warnungen**: Klare Benutzerhinweise bei fehlenden Daten.
 
-2. **Maschinelles Lernen**:
-   - Random-Forest-Modell mit synthetischem Datensatz (Platzhalter, später durch echte Daten ersetzen).
-   - `compute_waypoint_risk` integriert Schiffstyp und Ladungssicherung für die USP (Containerverlustrisiken).
-
-3. **Code-Qualität**:
-   - Einheitliche Einrückung (4 Leerzeichen).
-   - Klare Funktionskommentare und Docstrings.
-   - Entfernung redundanter Logik (z. B. konsolidierte Fehlerbehandlung).
-
-4. **Streamlit-UI**:
-   - Übersichtliche Spaltenaufteilung.
-   - CSV-Export bleibt erhalten.
-
-### **Ressourcenbedarf**
-- **Kosten**: Keine zusätzlichen Kosten (Open-Source-Bibliotheken, Open-Meteo).
-- **Zeit**: ~2–3 Stunden für Implementierung und Test.
-- **Daten**: Synthetischer Datensatz muss durch echte Containerverlustdaten ersetzt werden (z. B. World Shipping Council, ~0–2.000 CHF).
-
-### **Nächste Schritte**
-1. **Speichern**: Speichere den Code in `app.py` und die `requirements.txt` im Projektverzeichnis.
-2. **Installation**:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # oder venv\Scripts\activate auf Windows
-   pip install -r requirements.txt
-   ```
-3. **Testen**:
-   ```bash
-   streamlit run app.py
-   ```
-   Teste mit einer Route (z. B. Rotterdam–Istanbul) und überprüfe Karte, Risiko und CSV-Export.
-4. **Cache leeren** (falls nötig):
-   ```bash
-   rm -rf ~/.streamlit/cache
-   ```
-5. **Daten**: Suche nach Containerverlustdaten (z. B. WSC-Berichte) und ersetze den Datensatz in `load_risk_model`.
-
-Wenn der Fehler weiterhin auftritt oder du Hilfe beim Debugging (z. B. OpenSeaMap-Daten inspizieren) brauchst, teile mir die Ausgabe von `st.write("OpenSeaMap-Daten:", openseamap_geojson)` mit! Ich kann auch eine Upwork-Ausschreibung für einen Freelancer erstellen, falls du Unterstützung benötigst.
